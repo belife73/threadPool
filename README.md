@@ -23,7 +23,7 @@
    - **结构**：单向链表。
    - **并发控制**：
      - `head`/`tail` 指针的修改使用 **Spinlock**（因为链表操作极快，自旋锁效率高于互斥锁）。
-     - 线程的阻塞（当队列为空时）使用 **Mutex + Condition Variable**，避免空转浪费 CP U。
+     - 线程的阻塞（当队列为空时）使用 **Mutex + Condition Variable**，避免空转浪费 CPU。
    - **入队策略**：使用二级指针技巧 (`void **tail`) 快速追加节点。
 2. **工作线程 (Worker Threads)**
    - 线程池初始化时创建指定数量的线程。
@@ -37,38 +37,57 @@
 
 ### 2.2 逻辑流程图
 
-1. **初始化**: `thrdpool_create` -> 创建 TaskQueue -> 创建 Worker Threads。
-2. **生产任务**: `thrdpool_post` -> 封装 Task -> Spinlock 加锁 -> 入队 -> Spinlock 解锁 -> `pthread_cond_signal` 唤醒工作线程。
+1. **初始化**: `thread_pool_create` -> 创建 TaskQueue -> 创建 Worker Threads。
+2. **生产任务**: `thread_pool_post` -> 封装 Task -> Spinlock 加锁 -> 入队 -> Spinlock 解锁 -> `pthread_cond_signal` 唤醒工作线程。
 3. **消费任务**: Worker 唤醒 -> Spinlock 加锁 -> 取出 Head -> Spinlock 解锁 -> 执行任务 -> 销毁 Task 节点。
 
 ------
 
 ## 3. API 接口说明
 
-在 `thrd_pool.h` 中定义了对外接口：
+在 `thread_pool.h` 中定义了对外接口：
 
 | **函数原型**                                                 | **说明**                   | **参数与返回值**                                             |
 | ------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------ |
-| `thrdpool_t *thrdpool_create(int thrd_count)`                | 创建并初始化线程池         | **thrd_count**: 线程数量 **返回**: 线程池句柄，失败返回 NULL |
-| `int thrdpool_post(thrdpool_t *pool, handler_pt func, void *arg)` | 向线程池投递任务           | **pool**: 句柄 **func**: 任务回调函数 **arg**: 上下文参数 **返回**: 0 成功, -1 失败 |
-| `void thrdpool_terminate(thrdpool_t * pool)`                 | 通知线程池停止（非阻塞）   | **pool**: 句柄 设置退出标志，唤醒所有阻塞线程，不再接收新任务 |
-| `void thrdpool_waitdone(thrdpool_t *pool)`                   | 等待所有线程结束并销毁资源 | **pool**: 句柄 阻塞直到所有工作线程退出，释放队列和池的内存  |
+| `threadpool_t *thread_pool_create(int thread_count)`         | 创建并初始化线程池         | **thread_count**: 线程数量 **返回**: 线程池句柄，失败返回 NULL |
+| `int thread_pool_post(threadpool_t *pool, handler_pt func, void *arg)` | 向线程池投递任务           | **pool**: 句柄 **func**: 任务回调函数 **arg**: 上下文参数 **返回**: 0 成功, -1 失败 |
+| `void thread_pool_terminate(threadpool_t * pool)`            | 通知线程池停止（非阻塞）   | **pool**: 句柄 设置退出标志，唤醒所有阻塞线程，不再接收新任务 |
+| `void thread_pool_waitdone(threadpool_t *pool)`              | 等待所有线程结束并销毁资源 | **pool**: 句柄 阻塞直到所有工作线程退出，释放队列和池的内存  |
 
 ------
 
 ## 4. 构建与编译指南
 
-项目包含 C 和 C++ 代码，通常编译为动态库供业务链接。
+项目使用 CMake 进行构建，支持 C 和 C++ 代码，编译为动态库供业务链接。
 
-### 4.1 编译核心库 (`libthrd_pool.so`)
+### 4.1 构建步骤
 
-```Bash
-# 1. 编译目标文件 (Position Independent Code)
-gcc thrd_pool.c -c -fPIC -o thrd_pool.o
+```bash
+# 1. 进入项目根目录
+cd /root/project
 
-# 2. 链接生成动态库
-gcc -shared thrd_pool.o -o libthrd_pool.so -I./ -L./ -lpthread
+# 2. 创建构建目录
+mkdir -p build
+cd build
+
+# 3. 运行 CMake 生成构建文件
+cmake ..
+
+# 4. 编译
+make
+
+# 5. 运行测试（可选）
+./main
+./thrdpool_test
 ```
+
+### 4.2 生成的文件
+
+- **库文件**: `libthrdpool.so` - 线程池动态库
+- **测试程序**:
+  - `main` - C 语言基础功能测试
+  - `thrdpool_test` - C++ 性能测试
+  - `task_queue_test` - C++ 单元测试（需要 GTest）
 
 ------
 
@@ -76,78 +95,57 @@ gcc -shared thrd_pool.o -o libthrd_pool.so -I./ -L./ -lpthread
 
 本项目提供了三个层级的测试：功能测试、单元测试和性能基准测试。
 
-### 5.1 功能集成测试 (`main.c`)
+### 5.1 功能集成测试 (`main`)
 
 **目的**：验证线程池的基本创建、任务执行和销毁流程是否没有死锁或崩溃。
 
 - **测试逻辑**：
-
   1. 创建 8 个线程的池。
-  2. 主线程循环投递任务。
+  2. 主线程循环投递任务（最多 2000 个）。
   3. 任务函数 `do_task` 对全局变量 `done` 进行加锁累加。
-  4. 当 `done` 达到 1000 时，调用 `thrdpool_terminate`。
-  5. 主线程调用 `thrdpool_waitdone` 回收资源。
+  4. 当 `done` 达到 1000 时，调用 `thread_pool_terminate`。
+  5. 主线程调用 `thread_pool_waitdone` 回收资源。
 
-- **编译与运行**：
-
-  ```Bash
-  gcc main.c -o main -I./ -L./ -lthrdpool -lpthread
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:.
+- **运行**：
+  ```bash
   ./main
   ```
 
-### 5.2 单元测试 (`taskqueue_test.cc`)
+### 5.2 单元测试 (`task_queue_test`)
 
 **目的**：针对内部数据结构 `task_queue` 进行白盒测试，重点验证内存泄漏和队列逻辑。需要依赖 **Google Test (gtest)** 框架。
 
 - **测试用例**：
+  - `TEST(task_queue, normal)`: 测试队列的创建、入队出队操作和内存管理。
 
-  - `TEST(task_queue, normal)`:
-    - 测试队列的创建。
-    - 连续入队 10 个元素，再连续出队，验证数量一致性。
-    - 再次复用队列进行入队出队操作。
-    - 验证是否存在内存越界或指针丢失。
-
-- **编译与运行**：
-
-  ```Bash
-  # 需要安装 gtest 开发库
-  g++ taskqueue_test.cc -o taskqueue_test -lgtest -lgtest_main -lpthread
-  ./taskqueue_test
+- **运行**：
+  ```bash
+  ./task_queue_test
   ```
 
-  *预期输出*：`[ PASSED ] 1 test.`
-
-### 5.3 性能/基准测试 (`thrdpool_test.cc`)
+### 5.3 性能/基准测试 (`thrdpool_test`)
 
 **目的**：评估线程池在“多生产者-多消费者”模型下的吞吐量（QPS）。
 
 - **测试场景**：
-
   - **生产者**：启动 `n` 个 `std::thread` 线程，每个线程疯狂投递任务。
   - **消费者**：线程池内部的 Worker 线程。
   - **任务**：简单的原子累加操作 (`JustTask`)，模拟高频短任务。
   - **指标**：计算处理 1,000,000 * n 个任务所需的总耗时，输出“每秒执行次数”。
 
 - **代码配置**：
-
   - 默认测试：`test_thrdpool(4, 4)` (4个生产者线程，4个线程池Worker)。
   - 可调整 `main` 函数中的参数进行压力测试。
 
-- **编译与运行**：
-
-  ```Bash
-  # 链接核心库与 pthread
-  g++ -Wl,-rpath=./ thrdpool_test.cc -o thrdpool_test -I./ -L./ -lthrdpool -lpthread
+- **运行**：
+  ```bash
   ./thrdpool_test
   ```
 
 - **结果解读示例**：
-
   ```
-  <结束时间戳> <开始时间戳> used:<毫秒数> exec per sec:<每秒执行任务数>
+  2218446 2217641 used:805 exec per sec:4.96894e+06
   ```
-
   *注意：若 `exec per sec` 数值较低，可能原因是锁竞争激烈或任务本身过于简单导致调度开销占比过大。*
 
 ------
@@ -155,27 +153,55 @@ gcc -shared thrd_pool.o -o libthrd_pool.so -I./ -L./ -lpthread
 ## 6. 常见问题 (FAQ)
 
 1. **为什么要自己实现 Spinlock？**
-
    - `pthread_mutex` 在某些老旧内核或特定场景下上下文切换开销较大。对于队列指针的修改通常只需几条指令，使用自旋锁（用户态空转）能避免切入内核态，显著提升高并发下的入队/出队性能。
 
 2. **如何避免虚假唤醒？**
-
-   - 在 `thrd_pool.c` 的 `__get_task` 函数中，使用了 `while` 循环检查队列状态：
-
+   - 在 `thread_pool.c` 的 `__get_task` 函数中，使用了 `while` 循环检查队列状态：
      ```C
      while ((task = __pop_task(queue)) == NULL) {
          // ... wait ...
      }
      ```
-
      这是使用条件变量的标准范式。
 
 3. **内存泄漏检测**
-
-   - 建议使用 Valgrind 运行 `main` 或 `taskqueue_test`：
-
-     ```Bash
+   - 建议使用 Valgrind 运行 `main` 或 `task_queue_test`：
+     ```bash
      valgrind --leak-check=full ./main
      ```
+   - `thread_pool_waitdone` 函数中包含了对剩余任务和线程资源的清理逻辑，确保正常退出时无泄漏。
 
-   - `thrdpool_waitdone` 函数中包含了对剩余任务和线程资源的清理逻辑，确保正常退出时无泄漏。
+4. **如何添加自定义任务？**
+   - 定义一个符合 `handler_pt` 类型的回调函数，例如：
+     ```C
+     void my_task(void *arg) {
+         // 任务逻辑
+     }
+     ```
+   - 使用 `thread_pool_post(pool, my_task, arg)` 投递任务。
+
+------
+
+## 7. 项目结构
+
+```
+/root/project/
+├── CMakeLists.txt      # CMake 构建配置文件
+├── include/            # 头文件目录
+│   ├── atomic.h        # 原子操作封装
+│   ├── spinlock.h      # 自旋锁实现
+│   └── thread_pool.h   # 线程池对外接口
+├── src/                # 源代码目录
+│   └── thread_pool.c   # 线程池核心实现
+├── test/               # 测试程序目录
+│   ├── main.c          # C 功能测试
+│   ├── thrdpool_test.cc # C++ 性能测试
+│   └── task_queue.cc   # C++ 单元测试
+└── README.md           # 项目文档
+```
+
+------
+
+## 8. 许可证
+
+本项目采用 MIT 许可证，详情请查看 LICENSE 文件。
