@@ -208,7 +208,7 @@ __threads_create(threadpool_t* pool, size_t thread_count)
     int ret;
 
     ret = pthread_attr_init(&attr);
-    if (ret != 0)
+    if (ret == 0)
     {
         pool->threads = (pthread_t *)malloc(sizeof(pthread_t) * thread_count);
         if (pool->threads)
