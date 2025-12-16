@@ -1,0 +1,36 @@
+# 构建目录
+build/
+
+# 编译生成的文件
+*.o
+*.so
+*.a
+*.exe
+*.out
+
+# 编辑器生成的文件
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# 操作系统生成的文件
+.DS_Store
+Thumbs.db
+
+# 其他临时文件
+*.log
+*.tmp
+*.temp
+
+# CMake 生成的文件
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+
+# 编译缓存
+.ccache/
+.cache/

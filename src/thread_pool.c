@@ -154,7 +154,7 @@ __get_task(task_queue_t* queue)
 }
 
 static void 
-__taskqueue_destroy(task_queue_t* queue)
+__task_queue_destroy(task_queue_t* queue)
 {
     task_t* task;
     while ((task = (task_t*)__pop_task(queue)) != NULL)
@@ -237,25 +237,25 @@ __threads_create(threadpool_t* pool, size_t thread_count)
 }
 
 void
-threadpool_destroy(threadpool_t* pool)
+thread_pool_terminate(threadpool_t* pool)
 {
     atomic_store(&pool->quit, 1);
     __nonblock(pool->task_queue);
 }
 
 threadpool_t *
-thrdpool_create(int thrd_count) {
+thread_pool_create(int thrd_count) {
     threadpool_t *pool;
 
     pool = (threadpool_t*)malloc(sizeof(*pool));
     if (pool) {
-        task_queue_t *queue = __taskqueue_create();
+        task_queue_t *queue = __task_queue_create();
         if (queue) {
             pool->task_queue = queue;
             atomic_init(&pool->quit, 0);
             if (__threads_create(pool, thrd_count) == 0)
                 return pool;
-            __taskqueue_destroy(queue);
+            __task_queue_destroy(queue);
         }
         free(pool);
     }
@@ -263,7 +263,7 @@ thrdpool_create(int thrd_count) {
 }
 
 int
-thrdpool_post(threadpool_t *pool, handler_pt func, void *arg) {
+thread_pool_post(threadpool_t *pool, handler_pt func, void *arg) {
     if (atomic_load(&pool->quit) == 1) 
         return -1;
     task_t *task = (task_t*) malloc(sizeof(task_t));
@@ -275,12 +275,12 @@ thrdpool_post(threadpool_t *pool, handler_pt func, void *arg) {
 }
 
 void
-thrdpool_waitdone(threadpool_t *pool) {
+thread_pool_waitdone(threadpool_t *pool) {
     int i;
     for (i=0; i<pool->thread_count; i++) {
         pthread_join(pool->threads[i], NULL);
     }
-    __taskqueue_destroy(pool->task_queue);
+    __task_queue_destroy(pool->task_queue);
     free(pool->threads);
     free(pool);
 }
